@@ -1,0 +1,5 @@
+node_modules/
+data/a.csv
+private/config.json
+res/data.csv
+res/prog.json

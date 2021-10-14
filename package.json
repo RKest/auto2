@@ -1,0 +1,25 @@
+{
+  "name": "auto2",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RKest/auto2.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/RKest/auto2/issues"
+  },
+  "homepage": "https://github.com/RKest/auto2#readme",
+  "dependencies": {
+    "csv-parser": "^3.0.0",
+    "json2csv": "^5.0.6",
+    "puppeteer": "^10.4.0"
+  }
+}
