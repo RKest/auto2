@@ -49,10 +49,16 @@ const BOOKING_PROCEED = async page => {
 const BOOKING_REFERNECE_URL = async (page, ref) => {
     await page.focus(".ext-search-input");
     await sleep(1000);
-    await page.$eval(".ext-search-input", el => el.value = "");
-    await page.keyboard.type(`${ref}`);
-    await page.waitForSelector(".ext-search__content--open > * > a");
-    return await page.$eval(".ext-search__content--open > * > a", el => el.href);
+    try{
+        await page.$eval(".ext-search-input", el => el.value = "");
+        await page.keyboard.type(`${ref}`);
+        await page.waitForSelector(".ext-search__content--open > * > a", { timeout: 10000 });
+        return await page.$eval(".ext-search__content--open > * > a", el => el.href);
+    } catch (e)
+    {
+        throw "Customer doesn`t show up in the search box";
+    }
+    
 }
 
 const BOOKING_ARRIVAL_DATE = async page => {
@@ -133,7 +139,10 @@ fs.createReadStream(DATA_PATH)
             parsedResults.push(tmpObj);
         }
 
-        const filteredResults = parsedResults.filter(el => el["Origin"] === DESIERED_ORIGIN);
+        const originKey = "Origin";
+        const filteredResults = parsedResults.filter(el => el[originKey] === DESIERED_ORIGIN);
+        if(filteredResults === undefined)
+            throw `No csv column with the key of '${originKey}'`;
         //Is equal to "Booking" but is not "js equal" to "Booking"
         const bookingKey = Object.keys(filteredResults[0])[0];
         const firstPaymentDateKey = Object.keys(filteredResults[0])[36];
