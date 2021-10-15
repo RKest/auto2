@@ -13,8 +13,22 @@ const icneaToBookingMap = xlsxJson.map(el => ({ [el["ICNEA ID"]]: el["BOOKING ID
 
 const sleep = util.promisify(setTimeout);
 const rSync = path => fs.readFileSync(path, "utf-8");
-const wSync = (path, data) => fs.writeFileSync(path, data, "utf-8");
 
+const gotoWithFallback = async (page, url, ctr = 3) => {
+    return new Promise(async (resolve, reject) => {
+        try {
+            await page.goto(url, pageGotoOptions);
+            resolve();
+        } catch(e)
+        {
+            console.error(`Failed to connect to ${url}, attempting ${ctr} more tires`);
+            if(ctr)
+                await gotoWithFallback(page, url, ctr - 1);
+            else 
+                reject(new Error(`Page failed to load at ${url}`));
+        }
+    });
+}
 
 const PrepaymentEnum = {
     WITH_DATE: 0,
@@ -130,13 +144,12 @@ fs.createReadStream(DATA_PATH)
             browser.newPage()
         ]);
 
-        await icneaPage.goto("https://gero.icnea.net/Servidor.aspx", pageGotoOptions);
+        await gotoWithFallback(icneaPage, "https://gero.icnea.net/Servidor.aspx");
         await ICENA_FILL_EMAIL(icneaPage, config.icneaEmail);
         await ICENA_FILL_PASSWD(icneaPage, config.icneaPasswd);
         await ICENA_PROCEED(icneaPage);
 
-        await bookingPage.goto(config.bookingUrl, pageGotoOptions);
-
+        await gotoWithFallback(bookingPage, config.bookingUrl);
         await BOOKING_FILL_UNAME(bookingPage);
         await BOOKING_PROCEED(bookingPage);
         await BOOKING_FILL_PASSWD(bookingPage, config.bookingPasswd);
@@ -203,13 +216,13 @@ fs.createReadStream(DATA_PATH)
                     throw `No hotel id mapped for guest with icnea id of: ${bookingObj.icneaId}`;
 
                 const icneaUrl = URL_FROM_BOOKING_NUMBER(bookingObj.icneaId);
-                await icneaPage.goto(icneaUrl, pageGotoOptions);
+                await gotoWithFallback(icneaPage, icneaUrl);
                 const referenceNumber = await ICNEA_REFERENCE_NUMBER(icneaPage);
                 const reservationDate = await ICNEA_RESERVATION_DATE(icneaPage);
                 bookingObj.res_id = referenceNumber;
 
                 const bookingUrl = BOOKING_URL(sesId, bookingObj);
-                await bookingPage.goto(bookingUrl, pageGotoOptions)
+                await gotoWithFallback(bookingPage, bookingUrl);
 
                 const arrivalDate = await BOOKING_ARRIVAL_DATE(bookingPage, bookingObj.icneaId);
                 const prepaymentMessage = await BOOKING_PREPAYMENT_MESSAGE(bookingPage, bookingObj.icneaId);
