@@ -2,6 +2,6 @@
 2. Open the app.js´s root directory in command prompt or powershell
 3. Run 'npm install' in the command prompt or powershell
 4. Add 'a.csv' to 'data' directory with the icnea data
-5. Copy the 'config-schema.json' file into the 'private' directory
-6. Rename the newely copied 'config-schema.json' in the 'private' directory to 'conifg.json'
+5. Rename the 'config-schema.json' in the 'private' directory to 'conifg.json'
+6. Fill out the fields in the 'config.json' file when filling out the 'chromeExePath' make sure to follow instructions
 7. Run 'node app.js' in the command prompt or powershell
