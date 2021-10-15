@@ -4,6 +4,12 @@ const csv = require("csv-parser");
 const fs = require("fs");
 const util = require("util");
 const cp = require("child_process");
+const xlsx = require("xlsx");
+const workbook = xlsx.readFile('data/map.xlsx');
+const sheet_name_list = workbook.SheetNames;
+const xlsxJson = xlsx.utils.sheet_to_json(workbook.Sheets[sheet_name_list[0]]);
+const icneaToBookingMap = xlsxJson.map(el => ({ [el["ICNEA ID"]]: el["BOOKING ID"] }))
+    .reduce((prev, el) => ({ ...prev, ...el }), {});
 
 const sleep = util.promisify(setTimeout);
 const rSync = path => fs.readFileSync(path, "utf-8");
@@ -22,6 +28,10 @@ const DESIERED_ORIGIN = "Booking"
 const CONFIG_PATH = __dirname + "/private/config.json";
 
 const RES_PATH = __dirname + "/res";
+try {
+    fs.mkdirSync(RES_PATH);
+}catch(e){
+}
 
 const pageGotoOptions = { waitUntil: "networkidle2", timeout: 0 };
 const URL_FROM_BOOKING_NUMBER = number => `https://gero.icnea.net/HosOrdReserva.aspx?res=${number}`;
@@ -45,36 +55,41 @@ const BOOKING_PROCEED = async page => {
     await page.$eval("._3idbYJ1oAGD-sl-6gdCR2e", el => el.click());
     await page.waitForNavigation(pageGotoOptions);
 }
+const BOOKING_SES_ID = page => {
+    const urlString = page.url();
+    const url = new URL(urlString);
+    const searchParams = url.searchParams;
+    return searchParams.get("ses");
+}
 
-const BOOKING_REFERNECE_URL = async (page, ref) => {
-    await page.focus(".ext-search-input");
-    await sleep(1000);
-    try{
-        await page.$eval(".ext-search-input", el => el.value = "");
-        await page.keyboard.type(`${ref}`);
-        await page.waitForSelector(".ext-search__content--open > * > a", { timeout: 10000 });
-        return await page.$eval(".ext-search__content--open > * > a", el => el.href);
-    } catch (e)
-    {
-        throw "Customer doesn`t show up in the search box";
+const BOOKING_URL = (ses, obj) =>
+    `https://admin.booking.com/hotel/hoteladmin/extranet_ng/manage/booking.html?lang=en&ses=${ses}&res_id=${obj.res_id}&hotel_id=${obj.hotel_id}`;
+
+const BOOKING_ARRIVAL_DATE = async (page, icneaId) => {
+    try {
+        const contents = await page.$eval(".bui-grid__column-full > * > p:nth-child(2)", el => el.textContent);
+        const reg = new RegExp("\\d.*.\\d");
+        const datePart = contents.match(reg);
+        const date = new Date(datePart);
+        return date;
+    } catch (e) {
+        throw `No arrival date found for person with icnea id of ${icneaId}`;
     }
-    
 }
 
-const BOOKING_ARRIVAL_DATE = async page => {
-    const contents = await page.$eval(".bui-grid__column-full > * > p:nth-child(2)", el => el.textContent);
-    const reg = new RegExp("\\d.*.\\d");
-    const datePart = contents.match(reg);
-    const date = new Date(datePart);
-    return date;
+const BOOKING_PREPAYMENT_MESSAGE = async (page, icneaId) => {
+    try {
+        return await page.$$eval(".res-policies__row", els => {
+            const rightEl = els.find(el =>
+                el.childNodes[0].childNodes[0].childNodes[0].textContent.trim() === "Prepayment");
+            return rightEl.childNodes[0].childNodes[2].childNodes[0].textContent.trim();
+        });
+    }
+    catch (e) {
+        throw `No prepayment message for person with icena id of ${icneaId}`;
+    }
 }
 
-const BOOKING_PREPAYMENT_MESSAGE = async page =>
-    await page.$$eval(".res-policies__row", els => {
-        const rightEl = els.find(el =>
-            el.childNodes[0].childNodes[0].childNodes[0].textContent.trim() === "Prepayment");
-        return rightEl.childNodes[0].childNodes[2].childNodes[0].textContent.trim();
-    });
 
 
 const DATA_PATH = __dirname + "/data/a.csv";
@@ -89,7 +104,7 @@ fs.createReadStream(DATA_PATH)
     .on('end', async () => {
         var config;
         try {
-            config = JSON.parse(rSync(CONFIG_PATH));            
+            config = JSON.parse(rSync(CONFIG_PATH));
         } catch (e) {
             throw "No config.json in the '/private' folder";
         }
@@ -103,15 +118,14 @@ fs.createReadStream(DATA_PATH)
             throw "No 'icneaPasswd' defined in config.json";
         if (!config.chromeExePath)
             throw "No 'chromeExePath' defined in config.json";
-        
-        cp.spawn(config.chromeExePath, ["--remote-debugging-port=9222"], {detached: true});
-        await sleep(5000);
+
+        cp.spawn(config.chromeExePath, ["--remote-debugging-port=9222"], { detached: true });
+        await sleep(10000);
         const browser = await puppeteer.connect({
             browserURL: "http://127.0.0.1:9222"
         });
-        
-        const [bookingPage, exactBookingPage, icneaPage] = await Promise.all([
-            browser.newPage(),
+
+        const [bookingPage, icneaPage] = await Promise.all([
             browser.newPage(),
             browser.newPage()
         ]);
@@ -127,6 +141,7 @@ fs.createReadStream(DATA_PATH)
         await BOOKING_PROCEED(bookingPage);
         await BOOKING_FILL_PASSWD(bookingPage, config.bookingPasswd);
         await BOOKING_PROCEED(bookingPage);
+        const sesId = BOOKING_SES_ID(bookingPage);
 
         const parsedResults = [];
         for (const data of results) {
@@ -141,12 +156,21 @@ fs.createReadStream(DATA_PATH)
 
         const originKey = "Origin";
         const filteredResults = parsedResults.filter(el => el[originKey] === DESIERED_ORIGIN);
-        if(filteredResults === undefined)
+        if (filteredResults === undefined)
             throw `No csv column with the key of '${originKey}'`;
         //Is equal to "Booking" but is not "js equal" to "Booking"
         const bookingKey = Object.keys(filteredResults[0])[0];
+        const NOT_FOUND_KEY = "00000000";
         const firstPaymentDateKey = Object.keys(filteredResults[0])[36];
-        const filteredBookingNumbers = filteredResults.map(el => el[bookingKey]);
+        const propertyIcneaKeyKey = Object.keys(filteredResults[0])[37];
+        const filteredBookingObjects = filteredResults.map(el => {
+            return ({
+                icneaId: el[bookingKey],
+                res_id: "",
+                hotel_id: icneaToBookingMap[el[propertyIcneaKeyKey]] ?? NOT_FOUND_KEY
+            });
+        });
+
 
         const csvParser = new Parser({
             delimiter: ";"
@@ -157,28 +181,38 @@ fs.createReadStream(DATA_PATH)
             header: false
         });
 
-        const progressJSON = {
-            i: 0,
-            outof: filteredBookingNumbers.length
+        var progressJSON;
+        try {
+            progressJSON = JSON.parse(rSync(RES_PATH + "/prog.json"));
+        }catch(e)
+        {
+            progressJSON = {
+                i: 0,
+                outof: filteredBookingObjects.length
+            }; 
         }
 
         const aSync = line => fs.appendFileSync(RES_PATH + "/data2.csv", line, "utf-8");
         const updateProgress = progressJSON =>
             fs.writeFileSync(RES_PATH + "/prog.json", JSON.stringify(progressJSON, null, 2), "utf-8");
-        for (progressJSON.i = 0; i < filteredBookingNumbers.length; progressJSON.i++) {
+        for (; progressJSON.i < filteredBookingObjects.length; progressJSON.i++) {
             const i = progressJSON.i;
             try {
-                const num = filteredBookingNumbers[i];
-                const url = URL_FROM_BOOKING_NUMBER(num);
-                await icneaPage.goto(url);
+                const bookingObj = filteredBookingObjects[i];
+                if (bookingObj.hotel_id === NOT_FOUND_KEY)
+                    throw `No hotel id mapped for guest with icnea id of: ${bookingObj.icneaId}`;
+
+                const icneaUrl = URL_FROM_BOOKING_NUMBER(bookingObj.icneaId);
+                await icneaPage.goto(icneaUrl, pageGotoOptions);
                 const referenceNumber = await ICNEA_REFERENCE_NUMBER(icneaPage);
                 const reservationDate = await ICNEA_RESERVATION_DATE(icneaPage);
+                bookingObj.res_id = referenceNumber;
 
-                const bookingPageUrl = await BOOKING_REFERNECE_URL(bookingPage, referenceNumber);
-                await exactBookingPage.goto(bookingPageUrl, pageGotoOptions);
+                const bookingUrl = BOOKING_URL(sesId, bookingObj);
+                await bookingPage.goto(bookingUrl, pageGotoOptions)
 
-                const arrivalDate = await BOOKING_ARRIVAL_DATE(exactBookingPage);
-                const prepaymentMessage = await BOOKING_PREPAYMENT_MESSAGE(exactBookingPage);
+                const arrivalDate = await BOOKING_ARRIVAL_DATE(bookingPage, bookingObj.icneaId);
+                const prepaymentMessage = await BOOKING_PREPAYMENT_MESSAGE(bookingPage, bookingObj.icneaId);
                 const messageTypeObject = determinePaymentTimeType(prepaymentMessage);
 
                 if (messageTypeObject.type === PrepaymentEnum.WITH_DATE) {
@@ -216,7 +250,8 @@ fs.createReadStream(DATA_PATH)
             }
 
         }
-
+        progressJSON.i = 0;
+        updateProgress(progressJSON);
         browser.close();
     }).on("error", () => {
         throw "Create 'a.csv' in the data foler";
